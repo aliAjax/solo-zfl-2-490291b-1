@@ -36,6 +36,31 @@ import AssetStatusBadge from '@/components/assets/AssetStatusBadge';
 
 type ExportScope = 'all' | 'filtered';
 
+const DROPPED_CODE_LABELS: Record<string, string> = {
+  not_an_object: '流转项不是有效的对象',
+  not_an_array: '流转记录不是数组，整段无法解析',
+  missing_id: '缺少有效编号',
+  invalid_action: '动作类型无效',
+  invalid_event_date: '事件日期不是真实公历日期（YYYY-MM-DD）',
+  invalid_created_at: '创建时间无效',
+  invalid_due_date: '预计归还日不是真实公历日期',
+  invalid_return_date: '实际归还日不是真实公历日期',
+  invalid_condition: '成色取值不合法',
+  missing_borrower: '借出记录缺少借用人',
+  missing_due_date: '借出记录缺少预计归还日',
+  missing_return_date: '归还记录缺少实际归还日期',
+  missing_condition: '归还记录缺少成色',
+  duplicate_checkout: '重复借出（上一笔借出尚未归还）',
+  duplicate_maintenance: '保养已在进行中，不能重复开始',
+  duplicate_retire: '重复退役',
+  return_without_checkout: '未借出就归还（找不到对应的借出记录）',
+  maintenance_without_start: '未开始保养就完成（找不到保养开始记录）',
+  illegal_transition: '状态机不允许的切换',
+  return_before_checkout: '归还日期早于借出日期',
+  maintenance_complete_before_start: '保养完成日期早于保养开始日期',
+  due_before_checkout: '预计归还日早于借出日期',
+};
+
 interface LogPreviewCardProps {
   validated: ValidatedLog;
   checked: boolean;
@@ -540,11 +565,11 @@ export default function ImportExportModal() {
     const countBalanced = droppedCount === totalCircItems - keptCircItems;
 
     const droppedGroups = droppedCirculation.reduce<
-      { reason: string; items: typeof droppedCirculation }[]
+      { code: string; reason: string; items: typeof droppedCirculation }[]
     >((acc, item) => {
-      const g = acc.find((x) => x.reason === item.reason);
+      const g = acc.find((x) => x.code === item.code);
       if (g) g.items.push(item);
-      else acc.push({ reason: item.reason, items: [item] });
+      else acc.push({ code: item.code, reason: item.reason, items: [item] });
       return acc;
     }, []);
 
@@ -635,7 +660,9 @@ export default function ImportExportModal() {
                     <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-brass-300/15 text-brass-200 border border-brass-300/30 font-mono font-bold text-[10px]">
                       {g.items.length}
                     </span>
-                    <span className="text-brass-200">{g.reason}</span>
+                    <span className="text-brass-200">
+                      {DROPPED_CODE_LABELS[g.code] ?? g.reason}
+                    </span>
                   </div>
                   <ul className="pl-7 space-y-0.5">
                     {g.items.slice(0, 6).map((item, i) => (

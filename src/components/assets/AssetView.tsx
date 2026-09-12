@@ -19,10 +19,12 @@ import {
   type KeyboardLog,
 } from '@/types';
 import {
+  compareRealDates,
   getActiveBorrowers,
   getActiveLoan,
   getAssetStats,
   getLoanUrgency,
+  isValidGregorianDate,
   todayStr,
   type LoanUrgency,
 } from '@/utils/assets';
@@ -65,9 +67,9 @@ function StatCard({
 }
 
 function dateInRange(date: string | undefined, from: string, to: string): boolean {
-  if (!date) return false;
-  if (from && date < from) return false;
-  if (to && date > to) return false;
+  if (!date || !isValidGregorianDate(date)) return false;
+  if (from && compareRealDates(date, from) === -1) return false;
+  if (to && compareRealDates(date, to) === 1) return false;
   return true;
 }
 

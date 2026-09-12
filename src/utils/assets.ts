@@ -15,6 +15,32 @@ export function todayStr(d: Date = new Date()): string {
   ).padStart(2, '0')}`;
 }
 
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * 是否为真实存在的公历日期（YYYY-MM-DD）。
+ * 拒绝格式错误以及格式正确但不存在的日期：02-30、09-99、非闰年的 02-29 等。
+ */
+export function isValidGregorianDate(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const m = DATE_RE.exec(value);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  if (mo < 1 || mo > 12 || da < 1 || da > 31) return false;
+  // 重建后反查，由引擎处理大小月和闰年，不一致说明日期被规整过（不存在）
+  const dt = new Date(y, mo - 1, da);
+  return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === da;
+}
+
+/** 按真实日历比较两个 YYYY-MM-DD 日期；任一非法返回 null */
+export function compareRealDates(a: string, b: string): -1 | 0 | 1 | null {
+  if (!isValidGregorianDate(a) || !isValidGregorianDate(b)) return null;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 export interface ActiveLoan {
   event: CirculationEvent;
   borrower: string;
@@ -228,26 +254,46 @@ export type AssetActionInput =
 /** 业务字段校验（在状态机校验通过之后），返回错误信息（key -> message） */
 export function validateActionInput(input: AssetActionInput): Record<string, string> {
   const errors: Record<string, string> = {};
+  const badDate = (label: string, v?: string) =>
+    v ? `${label} ${v} 不是真实存在的公历日期` : `请选择${label}`;
   switch (input.action) {
     case 'checkout':
       if (!input.borrower.trim()) errors.borrower = '请填写借用人';
       if (!input.date) errors.date = '请选择借出日期';
+      else if (!isValidGregorianDate(input.date)) errors.date = badDate('借出日期', input.date);
       if (!input.dueDate) {
         errors.dueDate = '请选择预计归还日';
-      } else if (input.date && input.dueDate < input.date) {
+      } else if (!isValidGregorianDate(input.dueDate)) {
+        errors.dueDate = badDate('预计归还日', input.dueDate);
+      } else if (
+        isValidGregorianDate(input.date) &&
+        compareRealDates(input.dueDate, input.date) === -1
+      ) {
         errors.dueDate = '预计归还日不能早于借出日期';
       }
       break;
     case 'return':
-      if (!input.returnDate) errors.returnDate = '请填写实际归还日期';
+      if (!input.returnDate) {
+        errors.returnDate = '请填写实际归还日期';
+      } else if (!isValidGregorianDate(input.returnDate)) {
+        errors.returnDate = badDate('实际归还日期', input.returnDate);
+      }
       if (!input.condition) errors.condition = '请选择归还成色';
       break;
     case 'maintenance_start':
     case 'maintenance_complete':
-      if (!input.date) errors.date = '请选择日期';
+      if (!input.date) {
+        errors.date = '请选择日期';
+      } else if (!isValidGregorianDate(input.date)) {
+        errors.date = badDate('保养日期', input.date);
+      }
       break;
     case 'retire':
-      if (!input.date) errors.date = '请选择退役日期';
+      if (!input.date) {
+        errors.date = '请选择退役日期';
+      } else if (!isValidGregorianDate(input.date)) {
+        errors.date = badDate('退役日期', input.date);
+      }
       break;
   }
   return errors;
@@ -265,7 +311,12 @@ export function timelineOrderError(
 ): { field: string; message: string } | null {
   if (input.action === 'return') {
     const loan = getActiveLoan(log);
-    if (loan && input.returnDate && loan.event.date && input.returnDate < loan.event.date) {
+    if (
+      loan &&
+      isValidGregorianDate(input.returnDate) &&
+      isValidGregorianDate(loan.event.date) &&
+      compareRealDates(input.returnDate, loan.event.date) === -1
+    ) {
       return {
         field: 'returnDate',
         message: `实际归还日期（${input.returnDate}）不能早于借出日期（${loan.event.date}）`,
@@ -274,7 +325,12 @@ export function timelineOrderError(
   }
   if (input.action === 'maintenance_complete') {
     const mt = getActiveMaintenance(log);
-    if (mt && input.date && mt.date && input.date < mt.date) {
+    if (
+      mt &&
+      isValidGregorianDate(input.date) &&
+      isValidGregorianDate(mt.date) &&
+      compareRealDates(input.date, mt.date) === -1
+    ) {
       return {
         field: 'date',
         message: `保养完成日期（${input.date}）不能早于保养开始日期（${mt.date}）`,
@@ -306,7 +362,10 @@ export interface DroppedCirculation {
   action: CirculationAction | string;
   /** 事件日期；清洗阶段被丢弃时可能是不合规的原始值 */
   date?: string;
+  /** 含具体值的完整原因，用于展示 */
   reason: string;
+  /** 稳定的原因类别代码，用于界面按原因分组（不含具体日期/值） */
+  code: string;
 }
 
 export interface RebuiltCirculation {
@@ -315,41 +374,31 @@ export interface RebuiltCirculation {
   dropped: DroppedCirculation[];
 }
 
-/** 非法切换在 replay 场景下的原因 */
+/** 非法切换在 replay 场景下的原因（code 用于分组，reason 含中文说明） */
 function replayTransitionReason(
   status: AssetStatus,
   action: CirculationAction,
-): string | null {
+): { code: string; reason: string } | null {
   const guard = canTransition(status, action);
   if (guard.ok) return null;
-  switch (action) {
-    case 'checkout':
-      if (status === 'lent_out') return '重复借出（上一笔借出尚未归还）';
-      if (status === 'maintenance') return '保养中不能借出';
-      if (status === 'retired') return '已退役的键盘不能再借出';
-      break;
-    case 'return':
-      if (status === 'in_stock') return '未借出就归还（找不到对应的借出记录）';
-      if (status === 'maintenance') return '保养中的键盘不能直接归还';
-      if (status === 'retired') return '已退役的键盘不能归还';
-      break;
-    case 'maintenance_start':
-      if (status === 'lent_out') return '外借中的键盘不能开始保养';
-      if (status === 'maintenance') return '保养已在进行中，不能重复开始';
-      if (status === 'retired') return '已退役的键盘不能开始保养';
-      break;
-    case 'maintenance_complete':
-      if (status === 'in_stock') return '未开始保养就完成（找不到保养开始记录）';
-      if (status === 'lent_out') return '外借中的键盘不能完成保养';
-      if (status === 'retired') return '已退役的键盘不能完成保养';
-      break;
-    case 'retire':
-      if (status === 'lent_out') return '外借中的键盘不能退役，请先归还';
-      if (status === 'maintenance') return '保养中的键盘不能退役，请先完成保养';
-      if (status === 'retired') return '重复退役';
-      break;
-  }
-  return guard.reason ?? '当前状态不允许该操作';
+  const table: Partial<Record<`${AssetStatus}:${CirculationAction}`, { code: string; reason: string }>> = {
+    'lent_out:checkout': { code: 'duplicate_checkout', reason: '重复借出（上一笔借出尚未归还）' },
+    'maintenance:checkout': { code: 'illegal_transition', reason: '保养中不能借出' },
+    'retired:checkout': { code: 'illegal_transition', reason: '已退役的键盘不能再借出' },
+    'in_stock:return': { code: 'return_without_checkout', reason: '未借出就归还（找不到对应的借出记录）' },
+    'maintenance:return': { code: 'illegal_transition', reason: '保养中的键盘不能直接归还' },
+    'retired:return': { code: 'illegal_transition', reason: '已退役的键盘不能归还' },
+    'lent_out:maintenance_start': { code: 'illegal_transition', reason: '外借中的键盘不能开始保养' },
+    'maintenance:maintenance_start': { code: 'duplicate_maintenance', reason: '保养已在进行中，不能重复开始' },
+    'retired:maintenance_start': { code: 'illegal_transition', reason: '已退役的键盘不能开始保养' },
+    'in_stock:maintenance_complete': { code: 'maintenance_without_start', reason: '未开始保养就完成（找不到保养开始记录）' },
+    'lent_out:maintenance_complete': { code: 'illegal_transition', reason: '外借中的键盘不能完成保养' },
+    'retired:maintenance_complete': { code: 'illegal_transition', reason: '已退役的键盘不能完成保养' },
+    'lent_out:retire': { code: 'illegal_transition', reason: '外借中的键盘不能退役，请先归还' },
+    'maintenance:retire': { code: 'illegal_transition', reason: '保养中的键盘不能退役，请先完成保养' },
+    'retired:retire': { code: 'duplicate_retire', reason: '重复退役' },
+  };
+  return table[`${status}:${action}`] ?? { code: 'illegal_transition', reason: guard.reason ?? '当前状态不允许该操作' };
 }
 
 /**
@@ -372,53 +421,69 @@ export function rebuildCirculationTimeline(
   );
 
   for (const ev of sorted) {
-    const drop = (reason: string) =>
-      dropped.push({ keyboardId, keyboardName, action: ev.action, date: ev.date, reason });
+    const drop = (code: string, reason: string) =>
+      dropped.push({ keyboardId, keyboardName, action: ev.action, date: ev.date, reason, code });
 
     // 1) 必填字段
     if (ev.action === 'checkout') {
       if (!ev.borrower?.trim()) {
-        drop('借出记录缺少借用人');
+        drop('missing_borrower', '借出记录缺少借用人');
         continue;
       }
       if (!ev.dueDate) {
-        drop('借出记录缺少预计归还日');
+        drop('missing_due_date', '借出记录缺少预计归还日');
         continue;
       }
     }
     if (ev.action === 'return') {
       if (!ev.returnDate) {
-        drop('归还记录缺少实际归还日期');
+        drop('missing_return_date', '归还记录缺少实际归还日期');
         continue;
       }
       if (!ev.condition) {
-        drop('归还记录缺少成色');
+        drop('missing_condition', '归还记录缺少成色');
         continue;
       }
     }
 
     // 2) 状态机
-    const reason = replayTransitionReason(status, ev.action);
-    if (reason) {
-      drop(reason);
+    const guardResult = replayTransitionReason(status, ev.action);
+    if (guardResult) {
+      drop(guardResult.code, guardResult.reason);
       continue;
     }
 
-    // 3) 日期先后
+    // 3) 日期先后（按真实公历日期）
     if (ev.action === 'return') {
-      if (activeCheckout && ev.returnDate! < activeCheckout.date) {
-        drop(`归还日期（${ev.returnDate}）早于借出日期（${activeCheckout.date}）`);
+      if (
+        activeCheckout &&
+        compareRealDates(ev.returnDate!, activeCheckout.date) === -1
+      ) {
+        drop(
+          'return_before_checkout',
+          `归还日期（${ev.returnDate}）早于借出日期（${activeCheckout.date}）`,
+        );
         continue;
       }
     }
     if (ev.action === 'maintenance_complete') {
-      if (activeMaintenance && ev.date < activeMaintenance.date) {
-        drop(`保养完成日期（${ev.date}）早于保养开始日期（${activeMaintenance.date}）`);
+      if (activeMaintenance && compareRealDates(ev.date, activeMaintenance.date) === -1) {
+        drop(
+          'maintenance_complete_before_start',
+          `保养完成日期（${ev.date}）早于保养开始日期（${activeMaintenance.date}）`,
+        );
         continue;
       }
     }
-    if (ev.action === 'checkout' && ev.dueDate && ev.dueDate < ev.date) {
-      drop(`预计归还日（${ev.dueDate}）早于借出日期（${ev.date}）`);
+    if (
+      ev.action === 'checkout' &&
+      ev.dueDate &&
+      compareRealDates(ev.dueDate, ev.date) === -1
+    ) {
+      drop(
+        'due_before_checkout',
+        `预计归还日（${ev.dueDate}）早于借出日期（${ev.date}）`,
+      );
       continue;
     }
 

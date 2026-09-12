@@ -117,6 +117,7 @@ function isValidCaseMaterial(v: unknown): v is KeyboardLog['caseMaterial'] {
 import { genNewId } from './id';
 import {
   rebuildCirculationTimeline,
+  isValidGregorianDate,
   type DroppedCirculation,
 } from './assets';
 
@@ -131,7 +132,7 @@ const VALID_CIRCULATION_ACTIONS: CirculationAction[] = [
   'retire',
 ];
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_FIELD_HINT = '（需为真实存在的公历日期 YYYY-MM-DD）';
 
 /**
  * 清洗单条键盘记录的流转列表。
@@ -150,6 +151,7 @@ export function normalizeCirculation(
 
   const report = (
     item: unknown,
+    code: string,
     reason: string,
     fields?: { action?: unknown; date?: unknown },
   ) => {
@@ -163,39 +165,55 @@ export function normalizeCirculation(
       action: typeof rawAction === 'string' ? rawAction : '(未知动作)',
       date: typeof rawDate === 'string' ? rawDate : undefined,
       reason,
+      code,
     });
   };
 
   for (const item of raw) {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      report(item, '流转项不是有效的对象');
+      report(item, 'not_an_object', '流转项不是有效的对象');
       continue;
     }
     const o = item as Record<string, unknown>;
 
     if (typeof o.id !== 'string' || !o.id) {
-      report(item, '缺少有效编号（id）');
+      report(item, 'missing_id', '缺少有效编号（id）');
       continue;
     }
-    if (
-      typeof o.action !== 'string' ||
-      !VALID_CIRCULATION_ACTIONS.includes(o.action as CirculationAction)
-    ) {
-      report(item, `动作类型无效：${o.action === undefined ? '缺失' : String(o.action)}`);
+    if (typeof o.action !== 'string' ||
+      !VALID_CIRCULATION_ACTIONS.includes(o.action as CirculationAction)) {
+      report(
+        item,
+        'invalid_action',
+        `动作类型无效：${o.action === undefined ? '缺失' : String(o.action)}`,
+      );
       continue;
     }
-    if (typeof o.date !== 'string' || !DATE_RE.test(o.date)) {
-      report(item, `事件日期格式无效（需 YYYY-MM-DD）：${o.date === undefined ? '缺失' : String(o.date)}`);
+    if (!isValidGregorianDate(o.date)) {
+      report(
+        item,
+        'invalid_event_date',
+        `事件日期无效${DATE_FIELD_HINT}：${o.date === undefined ? '缺失' : String(o.date)}`,
+      );
       continue;
     }
     if (typeof o.createdAt !== 'string' || isNaN(Date.parse(o.createdAt))) {
-      report(item, `创建时间无效：${o.createdAt === undefined ? '缺失' : String(o.createdAt)}`);
+      report(
+        item,
+        'invalid_created_at',
+        `创建时间无效：${o.createdAt === undefined ? '缺失' : String(o.createdAt)}`,
+      );
       continue;
     }
 
-    // 预计归还日：出现时必须是合法日期（借出时还会在状态机重建阶段校验非空）
-    if (o.dueDate !== undefined && (typeof o.dueDate !== 'string' || !DATE_RE.test(o.dueDate))) {
-      report(item, `预计归还日不合法：${String(o.dueDate)}`);
+    // 预计归还日：出现时必须是真实公历日期（借出时还会在状态机重建阶段校验非空）
+    if (o.dueDate !== undefined && !isValidGregorianDate(o.dueDate)) {
+      report(item, 'invalid_due_date', `预计归还日不合法${DATE_FIELD_HINT}：${String(o.dueDate)}`);
+      continue;
+    }
+    // 实际归还日：出现时必须是真实公历日期（归还时还会在状态机重建阶段校验非空）
+    if (o.returnDate !== undefined && !isValidGregorianDate(o.returnDate)) {
+      report(item, 'invalid_return_date', `实际归还日不合法${DATE_FIELD_HINT}：${String(o.returnDate)}`);
       continue;
     }
     // 成色：出现时必须在合法枚举内（归还时还会在状态机重建阶段校验非空）
@@ -204,7 +222,7 @@ export function normalizeCirculation(
       (typeof o.condition !== 'string' ||
         !ASSET_CONDITIONS.includes(o.condition as AssetCondition))
     ) {
-      report(item, `成色取值不合法：${String(o.condition)}`);
+      report(item, 'invalid_condition', `成色取值不合法：${String(o.condition)}`);
       continue;
     }
 
@@ -216,8 +234,7 @@ export function normalizeCirculation(
     };
     if (typeof o.borrower === 'string') ev.borrower = o.borrower;
     if (typeof o.dueDate === 'string') ev.dueDate = o.dueDate;
-    if (typeof o.returnDate === 'string' && DATE_RE.test(o.returnDate))
-      ev.returnDate = o.returnDate;
+    if (typeof o.returnDate === 'string') ev.returnDate = o.returnDate;
     if (typeof o.condition === 'string') ev.condition = o.condition as AssetCondition;
     if (typeof o.note === 'string') ev.note = o.note;
     if (typeof o.reason === 'string') ev.reason = o.reason;
@@ -253,6 +270,7 @@ export function normalizeLog(
       ...ctx,
       action: '(未知动作)',
       reason: '流转记录不是数组，整段无法解析',
+      code: 'not_an_array',
     });
   }
 
