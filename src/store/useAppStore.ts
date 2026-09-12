@@ -8,7 +8,7 @@ import { applyCirculation, type AssetActionInput } from '@/utils/assets';
 const STORAGE_KEY = 'keyfeeling-logs-v1';
 
 function normalizeAll(logs: KeyboardLog[]): KeyboardLog[] {
-  return logs.map(normalizeLog);
+  return logs.map((l) => normalizeLog(l));
 }
 
 function loadFromStorage(): KeyboardLog[] {

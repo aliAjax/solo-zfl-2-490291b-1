@@ -32,6 +32,8 @@ export interface ImportParseResult {
   fileValidLogs: KeyboardLog[];
   fileInvalidItems: Array<{ index: number; reason: string; raw: unknown }>;
   fileInternalDuplicates: Array<{ index: number; id: string; raw: unknown }>;
+  /** 按状态机重建时间线时被丢弃的流转事件（含键盘名、动作、原因） */
+  droppedCirculation: DroppedCirculation[];
   totalParsed: number;
   envelope?: ExportEnvelope;
 }
@@ -108,9 +110,13 @@ function isValidCaseMaterial(v: unknown): v is KeyboardLog['caseMaterial'] {
   return typeof v === 'string' && CASE_MATERIALS.includes(v as never);
 }
 
-export function genNewId(): string {
-  return 'log-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '-' + Math.random().toString(36).slice(2, 6);
-}
+import { genNewId } from './id';
+import {
+  rebuildCirculationTimeline,
+  type DroppedCirculation,
+} from './assets';
+
+export { genNewId };
 
 const VALID_ASSET_STATUSES: AssetStatus[] = ['in_stock', 'lent_out', 'maintenance', 'retired'];
 const VALID_CIRCULATION_ACTIONS: CirculationAction[] = [
@@ -122,22 +128,6 @@ const VALID_CIRCULATION_ACTIONS: CirculationAction[] = [
 ];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function statusFromLastEvent(events: CirculationEvent[]): AssetStatus | null {
-  const last = events[events.length - 1];
-  if (!last) return null;
-  switch (last.action) {
-    case 'checkout':
-      return 'lent_out';
-    case 'return':
-    case 'maintenance_complete':
-      return 'in_stock';
-    case 'maintenance_start':
-      return 'maintenance';
-    case 'retire':
-      return 'retired';
-  }
-}
 
 /** 清洗单条流转事件，非法条目直接丢弃 */
 export function normalizeCirculation(raw: unknown): CirculationEvent[] {
@@ -185,20 +175,27 @@ export function normalizeCirculation(raw: unknown): CirculationEvent[] {
 /**
  * 归一化一条已通过基础校验的记录：
  * 旧数据（无 status/circulation）默认在库、空时间线；
- * status 与时间线不一致时，以时间线末尾事件推导的状态为准。
+ * 有流转记录时按合法状态机逐条 replay 重建，非法切换 / 缺必填字段 / 日期倒挂的
+ * 事件被丢弃，最终状态由重建后的时间线推导。onDropped 收集被丢弃事件明细。
  */
-export function normalizeLog(log: KeyboardLog): KeyboardLog {
-  const circulation = normalizeCirculation(log.circulation);
-  let status: AssetStatus = 'in_stock';
-  if (circulation.length > 0) {
-    status = statusFromLastEvent(circulation) ?? 'in_stock';
-  } else if (
-    typeof log.status === 'string' &&
-    VALID_ASSET_STATUSES.includes(log.status as AssetStatus)
-  ) {
-    status = log.status as AssetStatus;
+export function normalizeLog(
+  log: KeyboardLog,
+  onDropped?: (dropped: DroppedCirculation[]) => void,
+): KeyboardLog {
+  const cleaned = normalizeCirculation(log.circulation);
+  if (cleaned.length === 0) {
+    let status: AssetStatus = 'in_stock';
+    if (
+      typeof log.status === 'string' &&
+      VALID_ASSET_STATUSES.includes(log.status as AssetStatus)
+    ) {
+      status = log.status as AssetStatus;
+    }
+    return { ...log, status, circulation: [] };
   }
-  return { ...log, status, circulation };
+  const rebuilt = rebuildCirculationTimeline(cleaned, log.id, log.name);
+  if (rebuilt.dropped.length > 0) onDropped?.(rebuilt.dropped);
+  return { ...log, status: rebuilt.status, circulation: rebuilt.circulation };
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +256,7 @@ export function extractLogsFromJson(rawJson: string): KeyboardLog[] {
   if (Array.isArray(parsed)) {
     return parsed
       .filter((item): item is KeyboardLog => validateLog(item).valid)
-      .map(normalizeLog);
+      .map((l) => normalizeLog(l));
   }
 
   if (
@@ -272,7 +269,7 @@ export function extractLogsFromJson(rawJson: string): KeyboardLog[] {
   ) {
     return (parsed as { data: unknown[] }).data
       .filter((item): item is KeyboardLog => validateLog(item).valid)
-      .map(normalizeLog);
+      .map((l) => normalizeLog(l));
   }
 
   return [];
@@ -309,6 +306,7 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
   const fileValidLogs: KeyboardLog[] = [];
   const fileInvalidItems: Array<{ index: number; reason: string; raw: unknown }> = [];
   const fileInternalDuplicates: Array<{ index: number; id: string; raw: unknown }> = [];
+  const droppedCirculation: DroppedCirculation[] = [];
   const seenIds = new Set<string>();
 
   rawArray.forEach((item, index) => {
@@ -318,7 +316,9 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
       return;
     }
 
-    const log = normalizeLog(item as KeyboardLog);
+    const log = normalizeLog(item as KeyboardLog, (dropped) =>
+      droppedCirculation.push(...dropped),
+    );
 
     if (seenIds.has(log.id)) {
       fileInternalDuplicates.push({ index, id: log.id, raw: item });
@@ -335,6 +335,7 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
     fileValidLogs,
     fileInvalidItems,
     fileInternalDuplicates,
+    droppedCirculation,
     totalParsed: rawArray.length,
     envelope,
   };

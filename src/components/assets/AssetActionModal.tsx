@@ -19,8 +19,10 @@ import {
 } from '@/types';
 import {
   canTransition,
+  getActiveLoan,
+  getActiveMaintenance,
   todayStr,
-  validateActionInput,
+  validateCirculationAction,
   type AssetActionInput,
 } from '@/utils/assets';
 import AssetStatusBadge from './AssetStatusBadge';
@@ -94,6 +96,10 @@ export default function AssetActionModal() {
   if (!open || !action) return null;
 
   const Icon = ACTION_ICONS[action];
+  const activeLoan = log ? getActiveLoan(log) : null;
+  const activeMaintenance = log ? getActiveMaintenance(log) : null;
+  const loanStart = activeLoan?.event.date ?? '';
+  const maintenanceStart = activeMaintenance?.date ?? '';
 
   const buildInput = (): AssetActionInput | null => {
     switch (action) {
@@ -115,7 +121,7 @@ export default function AssetActionModal() {
     if (!log || blocked) return;
     const input = buildInput();
     if (!input) return;
-    const fieldErrors = validateActionInput(input);
+    const fieldErrors = validateCirculationAction(log, input);
     setErrors(fieldErrors);
     if (Object.keys(fieldErrors).length > 0) return;
     const result = circulate(log.id, input);
@@ -240,6 +246,7 @@ export default function AssetActionModal() {
                   <input
                     type="date"
                     value={returnDate}
+                    min={loanStart || undefined}
                     max={today}
                     onChange={(e) => {
                       setReturnDate(e.target.value);
@@ -248,6 +255,11 @@ export default function AssetActionModal() {
                     className={`input-field ${errors.returnDate ? 'border-wine-500/60' : ''}`}
                     autoFocus
                   />
+                  {loanStart && (
+                    <p className="mt-1 text-[11px] text-ink-500">
+                      借出日期为 {loanStart}，实际归还日期不能更早
+                    </p>
+                  )}
                   <FieldError msg={errors.returnDate} />
                 </div>
                 <div>
@@ -294,11 +306,17 @@ export default function AssetActionModal() {
                   <input
                     type="date"
                     value={date}
+                    min={action === 'maintenance_complete' ? maintenanceStart || undefined : undefined}
                     max={action === 'maintenance_complete' ? today : undefined}
                     onChange={(e) => setDate(e.target.value)}
                     className={`input-field ${errors.date ? 'border-wine-500/60' : ''}`}
                     autoFocus
                   />
+                  {action === 'maintenance_complete' && maintenanceStart && (
+                    <p className="mt-1 text-[11px] text-ink-500">
+                      保养自 {maintenanceStart} 开始，完成日期不能更早
+                    </p>
+                  )}
                   <FieldError msg={errors.date} />
                 </div>
                 <div>

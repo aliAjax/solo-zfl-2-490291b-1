@@ -30,7 +30,7 @@ import {
   type ImportApplyResult,
   EXPORT_FORMAT_MAGIC,
 } from '@/utils/importExport';
-import { SWITCH_TYPE_LABELS, SOUND_CHARACTER_LABELS } from '@/types';
+import { SWITCH_TYPE_LABELS, SOUND_CHARACTER_LABELS, CIRCULATION_ACTION_LABELS } from '@/types';
 import { getRatingGradient, formatDate } from '@/utils/helpers';
 import AssetStatusBadge from '@/components/assets/AssetStatusBadge';
 
@@ -246,6 +246,9 @@ export default function ImportExportModal() {
   const [parseResult, setParseResult] = useState<ImportParseResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<ImportApplyResult | null>(null);
+  const [lastDroppedCirculation, setLastDroppedCirculation] = useState<
+    import('@/utils/assets').DroppedCirculation[]
+  >([]);
   const [strategy, setStrategy] = useState<DuplicateStrategy>('skip');
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -290,6 +293,7 @@ export default function ImportExportModal() {
       setExpandedIds(new Set());
       setExportScope('all');
       setActiveTab('export');
+      setLastDroppedCirculation([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, [isOpen]);
@@ -308,6 +312,7 @@ export default function ImportExportModal() {
       setImportError(null);
       setParseResult(null);
       setApplyResult(null);
+      setLastDroppedCirculation([]);
       setCheckedIds(new Set());
       setExpandedIds(new Set());
 
@@ -318,6 +323,7 @@ export default function ImportExportModal() {
           const existingIds = logs.map((l) => l.id);
           const result = parseImportData(content, existingIds);
           setParseResult(result);
+          setLastDroppedCirculation(result.droppedCirculation);
 
           const allIds = result.fileValidLogs.map((l) => l.id);
           setCheckedIds(new Set(allIds));
@@ -354,6 +360,7 @@ export default function ImportExportModal() {
     setParseResult(null);
     setImportError(null);
     setApplyResult(null);
+    setLastDroppedCirculation([]);
     setCheckedIds(new Set());
     setExpandedIds(new Set());
     if (fileInputRef.current) {
@@ -495,6 +502,13 @@ export default function ImportExportModal() {
           实际写入 {totalEffective} 条记录
         </div>
 
+        {lastDroppedCirculation.length > 0 && (
+          <div className="mb-4 rounded-lg bg-brass-300/8 border border-brass-300/25 px-3 py-2 text-[11px] text-brass-200">
+            另有 {lastDroppedCirculation.length} 条不合法的流转记录已按状态机过滤丢弃
+            （重复借出、未借先还、缺少必填字段或日期倒挂等），键盘记录本身均已正常导入。
+          </div>
+        )}
+
         <div className="flex gap-2 justify-center">
           <button
             onClick={resetImport}
@@ -519,6 +533,17 @@ export default function ImportExportModal() {
     const invalidCount = parseResult.fileInvalidItems.length;
     const existingDupCount = validated.duplicateWithExisting.length;
     const pureNewCount = validated.newLogs.length;
+    const droppedCirculation = parseResult.droppedCirculation;
+    const droppedCount = droppedCirculation.length;
+
+    const droppedGroups = droppedCirculation.reduce<
+      { reason: string; items: typeof droppedCirculation }[]
+    >((acc, item) => {
+      const g = acc.find((x) => x.reason === item.reason);
+      if (g) g.items.push(item);
+      else acc.push({ reason: item.reason, items: [item] });
+      return acc;
+    }, []);
 
     return (
       <div className="space-y-4 animate-fadeIn">
@@ -589,6 +614,41 @@ export default function ImportExportModal() {
                   ...还有 {fileDupCount - 5} 条重复
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {droppedCount > 0 && (
+          <div className="space-y-2">
+            <h4 className="text-xs font-mono font-semibold text-brass-300 uppercase tracking-wider flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              流转记录已过滤 ({droppedCount} 条，不影响其余数据导入)
+            </h4>
+            <div className="rounded-lg bg-brass-300/5 border border-brass-300/25 p-3 max-h-44 overflow-y-auto space-y-2.5 scrollbar-thin">
+              {droppedGroups.map((g, gi) => (
+                <div key={gi} className="space-y-1">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-brass-300/15 text-brass-200 border border-brass-300/30 font-mono font-bold text-[10px]">
+                      {g.items.length}
+                    </span>
+                    <span className="text-brass-200">{g.reason}</span>
+                  </div>
+                  <ul className="pl-7 space-y-0.5">
+                    {g.items.slice(0, 6).map((item, i) => (
+                      <li key={i} className="text-[10px] font-mono text-ink-500 truncate">
+                        「{item.keyboardName || item.keyboardId}」
+                        {item.date ? ` · ${item.date}` : ''} ·{' '}
+                        {CIRCULATION_ACTION_LABELS[item.action]}
+                      </li>
+                    ))}
+                    {g.items.length > 6 && (
+                      <li className="text-[10px] text-ink-600">
+                        ...还有 {g.items.length - 6} 条
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              ))}
             </div>
           </div>
         )}
