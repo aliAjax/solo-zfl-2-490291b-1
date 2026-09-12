@@ -1,4 +1,10 @@
-import type { KeyboardLog } from '@/types';
+import type {
+  AssetStatus,
+  AssetCondition,
+  CirculationAction,
+  CirculationEvent,
+  KeyboardLog,
+} from '@/types';
 import {
   SWITCH_TYPES,
   SOUND_CHARACTERS,
@@ -6,9 +12,10 @@ import {
   KEYCAP_PROFILES,
   PLATE_MATERIALS,
   CASE_MATERIALS,
+  ASSET_CONDITIONS,
 } from '@/types';
 
-export const EXPORT_FORMAT_VERSION = 1;
+export const EXPORT_FORMAT_VERSION = 2;
 export const EXPORT_FORMAT_MAGIC = 'keyfeeling-export';
 
 export type DuplicateStrategy = 'skip' | 'overwrite' | 'regenerate';
@@ -105,6 +112,97 @@ export function genNewId(): string {
   return 'log-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '-' + Math.random().toString(36).slice(2, 6);
 }
 
+const VALID_ASSET_STATUSES: AssetStatus[] = ['in_stock', 'lent_out', 'maintenance', 'retired'];
+const VALID_CIRCULATION_ACTIONS: CirculationAction[] = [
+  'checkout',
+  'return',
+  'maintenance_start',
+  'maintenance_complete',
+  'retire',
+];
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function statusFromLastEvent(events: CirculationEvent[]): AssetStatus | null {
+  const last = events[events.length - 1];
+  if (!last) return null;
+  switch (last.action) {
+    case 'checkout':
+      return 'lent_out';
+    case 'return':
+    case 'maintenance_complete':
+      return 'in_stock';
+    case 'maintenance_start':
+      return 'maintenance';
+    case 'retire':
+      return 'retired';
+  }
+}
+
+/** 清洗单条流转事件，非法条目直接丢弃 */
+export function normalizeCirculation(raw: unknown): CirculationEvent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CirculationEvent[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.id !== 'string' || !o.id) continue;
+    if (
+      typeof o.action !== 'string' ||
+      !VALID_CIRCULATION_ACTIONS.includes(o.action as CirculationAction)
+    )
+      continue;
+    if (typeof o.date !== 'string' || !DATE_RE.test(o.date)) continue;
+    if (typeof o.createdAt !== 'string' || isNaN(Date.parse(o.createdAt))) continue;
+
+    const ev: CirculationEvent = {
+      id: o.id,
+      action: o.action as CirculationAction,
+      date: o.date,
+      createdAt: o.createdAt,
+    };
+    if (typeof o.borrower === 'string') ev.borrower = o.borrower;
+    if (typeof o.dueDate === 'string' && DATE_RE.test(o.dueDate)) ev.dueDate = o.dueDate;
+    if (typeof o.returnDate === 'string' && DATE_RE.test(o.returnDate))
+      ev.returnDate = o.returnDate;
+    if (
+      typeof o.condition === 'string' &&
+      ASSET_CONDITIONS.includes(o.condition as AssetCondition)
+    ) {
+      ev.condition = o.condition as AssetCondition;
+    }
+    if (typeof o.note === 'string') ev.note = o.note;
+    if (typeof o.reason === 'string') ev.reason = o.reason;
+    if (typeof o.operator === 'string') ev.operator = o.operator;
+    out.push(ev);
+  }
+  out.sort((a, b) =>
+    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
+  );
+  return out;
+}
+
+/**
+ * 归一化一条已通过基础校验的记录：
+ * 旧数据（无 status/circulation）默认在库、空时间线；
+ * status 与时间线不一致时，以时间线末尾事件推导的状态为准。
+ */
+export function normalizeLog(log: KeyboardLog): KeyboardLog {
+  const circulation = normalizeCirculation(log.circulation);
+  let status: AssetStatus = 'in_stock';
+  if (circulation.length > 0) {
+    status = statusFromLastEvent(circulation) ?? 'in_stock';
+  } else if (
+    typeof log.status === 'string' &&
+    VALID_ASSET_STATUSES.includes(log.status as AssetStatus)
+  ) {
+    status = log.status as AssetStatus;
+  }
+  return { ...log, status, circulation };
+}
+
+// ---------------------------------------------------------------------------
+
 function validateLog(raw: unknown): { valid: boolean; reason?: string } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return { valid: false, reason: '不是有效的对象' };
@@ -159,7 +257,9 @@ export function extractLogsFromJson(rawJson: string): KeyboardLog[] {
   }
 
   if (Array.isArray(parsed)) {
-    return parsed.filter((item): item is KeyboardLog => validateLog(item).valid);
+    return parsed
+      .filter((item): item is KeyboardLog => validateLog(item).valid)
+      .map(normalizeLog);
   }
 
   if (
@@ -170,7 +270,9 @@ export function extractLogsFromJson(rawJson: string): KeyboardLog[] {
     'data' in parsed &&
     Array.isArray((parsed as { data: unknown }).data)
   ) {
-    return (parsed as { data: unknown[] }).data.filter((item): item is KeyboardLog => validateLog(item).valid);
+    return (parsed as { data: unknown[] }).data
+      .filter((item): item is KeyboardLog => validateLog(item).valid)
+      .map(normalizeLog);
   }
 
   return [];
@@ -216,7 +318,7 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
       return;
     }
 
-    const log = item as KeyboardLog;
+    const log = normalizeLog(item as KeyboardLog);
 
     if (seenIds.has(log.id)) {
       fileInternalDuplicates.push({ index, id: log.id, raw: item });

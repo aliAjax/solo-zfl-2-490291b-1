@@ -1,4 +1,4 @@
-import { Keyboard, Plus, GitCompare, List, BarChart3, HardDrive } from 'lucide-react';
+import { Keyboard, Plus, GitCompare, List, BarChart3, HardDrive, Briefcase } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 
 export default function Header() {
@@ -6,6 +6,12 @@ export default function Header() {
   const { viewMode, selectedForCompare } = ui;
 
   const compareCount = selectedForCompare.length;
+  const navBtn = (active: boolean) =>
+    `inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+      active
+        ? 'bg-brass-300/20 text-brass-100 border border-brass-300/30'
+        : 'text-ink-400 hover:text-ink-200'
+    }`;
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-700/60 bg-ink-900/85 backdrop-blur-xl">
@@ -37,6 +43,14 @@ export default function Header() {
             >
               <List className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">列表</span>
+            </button>
+            <button
+              onClick={() => setViewMode('assets')}
+              className={navBtn(viewMode === 'assets')}
+              title="资产流转"
+            >
+              <Briefcase className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">资产</span>
             </button>
             <button
               onClick={() => compareCount >= 2 && setViewMode('compare')}

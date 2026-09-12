@@ -1,12 +1,19 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Pencil, Trash2, Calendar } from 'lucide-react';
+import { X, Pencil, Trash2, Calendar, Briefcase } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { SWITCH_TYPE_LABELS, SOUND_CHARACTER_LABELS } from '@/types';
 import { getRatingGradient, formatDate } from '@/utils/helpers';
+import {
+  getActiveLoan,
+  getLoanUrgency,
+  todayStr,
+} from '@/utils/assets';
+import AssetStatusBadge from '@/components/assets/AssetStatusBadge';
+import Timeline from '@/components/assets/Timeline';
 
 export default function DetailModal() {
-  const { ui, closeDetail, openFormModal, deleteLog } = useAppStore();
+  const { ui, closeDetail, openFormModal, deleteLog, openAssetModal } = useAppStore();
   const log = ui.detailLog;
 
   useEffect(() => {
@@ -53,6 +60,10 @@ export default function DetailModal() {
       deleteLog(log.id);
     }
   };
+
+  const assetStatus = log.status ?? 'in_stock';
+  const urgency = getLoanUrgency(log, todayStr());
+  const activeLoan = getActiveLoan(log);
 
   return createPortal(
     <div
@@ -189,6 +200,123 @@ export default function DetailModal() {
               </div>
             </>
           )}
+
+          <div className="divider" />
+
+          <div className="space-y-4">
+            <h3 className="font-mono text-sm font-semibold text-brass-200 flex items-center gap-2">
+              <span className="w-1 h-4 rounded bg-brass-300" />
+              <Briefcase className="h-4 w-4" />
+              资产流转
+            </h3>
+
+            <div
+              className={`rounded-xl border p-4 space-y-3 ${
+                urgency === 'overdue'
+                  ? 'bg-wine-500/10 border-wine-500/35'
+                  : urgency === 'due_soon'
+                    ? 'bg-brass-300/8 border-brass-300/30'
+                    : 'bg-ink-900/60 border-ink-700/60'
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <AssetStatusBadge status={assetStatus} />
+                {urgency === 'overdue' && (
+                  <span className="chip border border-wine-500/45 bg-wine-500/15 text-wine-400">
+                    已逾期，请尽快催还
+                  </span>
+                )}
+                {urgency === 'due_soon' && (
+                  <span className="chip border border-brass-300/40 bg-brass-300/15 text-brass-200">
+                    3 天内即将到期
+                  </span>
+                )}
+              </div>
+
+              {assetStatus === 'lent_out' && activeLoan && (
+                <div className="grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-ink-500 mb-1">
+                      借用人
+                    </div>
+                    <div className="text-sm text-slateblue-300 font-medium">
+                      {activeLoan.borrower || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-ink-500 mb-1">
+                      借出日期
+                    </div>
+                    <div className="text-sm text-ink-200">
+                      {formatDate(activeLoan.event.date)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-ink-500 mb-1">
+                      预计归还
+                    </div>
+                    <div
+                      className={`text-sm font-medium ${
+                        urgency === 'overdue'
+                          ? 'text-wine-400'
+                          : urgency === 'due_soon'
+                            ? 'text-brass-200'
+                            : 'text-ink-200'
+                      }`}
+                    >
+                      {formatDate(activeLoan.dueDate)}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {assetStatus === 'in_stock' && (
+                  <>
+                    <button
+                      onClick={() => openAssetModal(log.id, 'checkout')}
+                      className="btn-primary !py-1.5 !text-xs"
+                    >
+                      借出登记
+                    </button>
+                    <button
+                      onClick={() => openAssetModal(log.id, 'maintenance_start')}
+                      className="btn-ghost !py-1.5 !text-xs"
+                    >
+                      送去保养
+                    </button>
+                    <button
+                      onClick={() => openAssetModal(log.id, 'retire')}
+                      className="btn-danger !py-1.5 !text-xs"
+                    >
+                      退役
+                    </button>
+                  </>
+                )}
+                {assetStatus === 'lent_out' && (
+                  <button
+                    onClick={() => openAssetModal(log.id, 'return')}
+                    className="btn-primary !py-1.5 !text-xs"
+                  >
+                    归还入库
+                  </button>
+                )}
+                {assetStatus === 'maintenance' && (
+                  <button
+                    onClick={() => openAssetModal(log.id, 'maintenance_complete')}
+                    className="btn-primary !py-1.5 !text-xs"
+                  >
+                    完成保养
+                  </button>
+                )}
+                {assetStatus === 'retired' && (
+                  <p className="text-xs text-ink-500">退役为终态，不可再登记流转。</p>
+                )}
+              </div>
+            </div>
+
+            <Timeline log={log} />
+          </div>
         </div>
       </div>
     </div>,

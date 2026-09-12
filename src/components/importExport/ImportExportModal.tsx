@@ -32,6 +32,7 @@ import {
 } from '@/utils/importExport';
 import { SWITCH_TYPE_LABELS, SOUND_CHARACTER_LABELS } from '@/types';
 import { getRatingGradient, formatDate } from '@/utils/helpers';
+import AssetStatusBadge from '@/components/assets/AssetStatusBadge';
 
 type ExportScope = 'all' | 'filtered';
 
@@ -130,6 +131,13 @@ function LogPreviewCard({
             <MiniRating label="回弹" value={log.reboundRating} />
             <MiniRating label="段落" value={log.tactilityRating} />
             <MiniRating label="疲劳" value={log.fatigueRating} invert />
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <AssetStatusBadge status={log.status ?? 'in_stock'} size="sm" />
+            <span className="text-[10px] font-mono text-ink-500">
+              {log.circulation?.length ?? 0} 条流转记录
+            </span>
           </div>
 
           {log.soundTags.length > 0 && (
@@ -434,7 +442,7 @@ export default function ImportExportModal() {
                 格式: {EXPORT_FORMAT_MAGIC}
               </span>
               <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-ink-800 border border-ink-700/60 text-ink-400">
-                包含: meta + data
+                包含: 手感记录 + 资产流转时间线
               </span>
             </div>
           </div>

@@ -1,23 +1,34 @@
 import { create } from 'zustand';
-import type { KeyboardLog, FilterState, UIState, ViewMode } from '@/types';
+import type { KeyboardLog, FilterState, UIState, ViewMode, CirculationAction } from '@/types';
 import { sampleData } from '@/data/sampleData';
 import type { ImportApplyResult, ValidatedLog } from '@/utils/importExport';
-import { applyImport, genNewId } from '@/utils/importExport';
+import { applyImport, genNewId, normalizeLog } from '@/utils/importExport';
+import { applyCirculation, type AssetActionInput } from '@/utils/assets';
 
 const STORAGE_KEY = 'keyfeeling-logs-v1';
+
+function normalizeAll(logs: KeyboardLog[]): KeyboardLog[] {
+  return logs.map(normalizeLog);
+}
 
 function loadFromStorage(): KeyboardLog[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sampleData));
-      return sampleData;
+      const seeded = normalizeAll(sampleData);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
+      return seeded;
     }
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    return sampleData;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const normalized = normalizeAll(parsed);
+      // 迁移后回写一次，补齐 status / circulation 字段
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+      return normalized;
+    }
+    return normalizeAll(sampleData);
   } catch {
-    return sampleData;
+    return normalizeAll(sampleData);
   }
 }
 
@@ -57,6 +68,10 @@ interface AppState {
   closeDetail: () => void;
   openImportExport: () => void;
   closeImportExport: () => void;
+  openAssetModal: (logId: string, action: CirculationAction) => void;
+  closeAssetModal: () => void;
+  /** 执行流转动作；非法切换返回 ok:false 与中文原因，不改动数据 */
+  circulate: (id: string, input: AssetActionInput) => { ok: true } | { ok: false; error: string };
 }
 
 const defaultFilter: FilterState = {
@@ -73,6 +88,7 @@ const defaultUI: UIState = {
   editingLog: null,
   detailLog: null,
   importExportModalOpen: false,
+  assetModal: { open: false, logId: null, action: null },
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -90,6 +106,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: genId(),
       createdAt: now,
       updatedAt: now,
+      status: 'in_stock',
+      circulation: [],
     };
     const next = [newLog, ...get().logs];
     set({ logs: next, ui: { ...get().ui, formModalOpen: false, editingLog: null } });
@@ -107,7 +125,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteLog: (id) => {
     const next = get().logs.filter((l) => l.id !== id);
     const selected = get().ui.selectedForCompare.filter((sid) => sid !== id);
-    set({ logs: next, ui: { ...get().ui, selectedForCompare: selected, detailLog: null } });
+    const assetModal =
+      get().ui.assetModal.logId === id
+        ? { open: false, logId: null, action: null }
+        : get().ui.assetModal;
+    set({
+      logs: next,
+      ui: { ...get().ui, selectedForCompare: selected, detailLog: null, assetModal },
+    });
     saveToStorage(next);
   },
 
@@ -151,6 +176,35 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openImportExport: () => set({ ui: { ...get().ui, importExportModalOpen: true } }),
   closeImportExport: () => set({ ui: { ...get().ui, importExportModalOpen: false } }),
+
+  openAssetModal: (logId, action) =>
+    set({ ui: { ...get().ui, assetModal: { open: true, logId, action } } }),
+  closeAssetModal: () =>
+    set({ ui: { ...get().ui, assetModal: { open: false, logId: null, action: null } } }),
+
+  circulate: (id, input) => {
+    const target = get().logs.find((l) => l.id === id);
+    if (!target) return { ok: false, error: '未找到该键盘记录' };
+    try {
+      const now = new Date().toISOString();
+      const updated = applyCirculation(target, input, now);
+      updated.updatedAt = now;
+      const next = get().logs.map((l) => (l.id === id ? updated : l));
+      const ui = get().ui;
+      set({
+        logs: next,
+        ui: {
+          ...ui,
+          detailLog: ui.detailLog?.id === id ? updated : ui.detailLog,
+          assetModal: { open: false, logId: null, action: null },
+        },
+      });
+      saveToStorage(next);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
 }));
 
 export function useFilteredLogs(): KeyboardLog[] {

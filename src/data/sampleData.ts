@@ -2,6 +2,13 @@ import type { KeyboardLog } from '@/types';
 
 const now = Date.now();
 const daysAgo = (n: number) => new Date(now - n * 86400000).toISOString();
+const dateAgo = (n: number) => {
+  const d = new Date(now - n * 86400000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+};
+const dateAhead = (n: number) => dateAgo(-n);
 
 export const sampleData: KeyboardLog[] = [
   {
@@ -28,7 +35,19 @@ export const sampleData: KeyboardLog[] = [
     fatigueRating: 3,
     notes: 'HHKB 配列 + Top Mount 结构，手感稳如磐石，声音下沉极好，长时间打字也不累。唯一缺点是太安静了，在办公室不太容易摸鱼（不对，是更容易摸鱼）。',
     createdAt: daysAgo(45),
-    updatedAt: daysAgo(45),
+    updatedAt: daysAgo(2),
+    status: 'lent_out',
+    circulation: [
+      {
+        id: 'sample-1-c1',
+        action: 'checkout',
+        date: dateAgo(20),
+        createdAt: daysAgo(20),
+        borrower: '张小明',
+        dueDate: dateAgo(5),
+        note: '借去体验 HHKB 配列',
+      },
+    ],
   },
   {
     id: 'sample-2',
@@ -54,7 +73,19 @@ export const sampleData: KeyboardLog[] = [
     fatigueRating: 6,
     notes: '经典蓝色 Click 轴，段落感极强，声音在办公室会被打。适合写代码时寻找节奏感，不适合在图书馆使用。SA 球帽刚开始有点累手。',
     createdAt: daysAgo(22),
-    updatedAt: daysAgo(8),
+    updatedAt: daysAgo(1),
+    status: 'lent_out',
+    circulation: [
+      {
+        id: 'sample-2-c1',
+        action: 'checkout',
+        date: dateAgo(10),
+        createdAt: daysAgo(10),
+        borrower: '李华',
+        dueDate: dateAhead(2),
+        note: '周末借去写稿',
+      },
+    ],
   },
   {
     id: 'sample-3',
@@ -80,7 +111,35 @@ export const sampleData: KeyboardLog[] = [
     fatigueRating: 4,
     notes: 'PC 定位板让段落感变柔和，声音很闷很舒服，不像金属定位板那么炸。小浣熊轴的段落圆润不卡手，非常适合日常写文档。',
     createdAt: daysAgo(12),
-    updatedAt: daysAgo(3),
+    updatedAt: daysAgo(1),
+    status: 'maintenance',
+    circulation: [
+      {
+        id: 'sample-3-c1',
+        action: 'checkout',
+        date: dateAgo(9),
+        createdAt: daysAgo(9),
+        borrower: '王工',
+        dueDate: dateAgo(4),
+      },
+      {
+        id: 'sample-3-c2',
+        action: 'return',
+        date: dateAgo(4),
+        createdAt: daysAgo(4),
+        returnDate: dateAgo(4),
+        condition: 'good',
+        borrower: '王工',
+        note: '归还时反馈空格卫星轴杂音',
+      },
+      {
+        id: 'sample-3-c3',
+        action: 'maintenance_start',
+        date: dateAgo(1),
+        createdAt: daysAgo(1),
+        note: '调校空格卫星轴，补充润滑',
+      },
+    ],
   },
   {
     id: 'sample-4',
@@ -106,6 +165,27 @@ export const sampleData: KeyboardLog[] = [
     fatigueRating: 2,
     notes: '打字不累，声音极小，是开会静音神器。但是轴体缺少个性和反馈感，对于喜欢机械手感的玩家来说略无聊，适合码字生产力场景。',
     createdAt: daysAgo(120),
-    updatedAt: daysAgo(80),
+    updatedAt: daysAgo(30),
+    status: 'in_stock',
+    circulation: [
+      {
+        id: 'sample-4-c1',
+        action: 'checkout',
+        date: dateAgo(60),
+        createdAt: daysAgo(60),
+        borrower: '赵姐',
+        dueDate: dateAgo(45),
+      },
+      {
+        id: 'sample-4-c2',
+        action: 'return',
+        date: dateAgo(46),
+        createdAt: daysAgo(46),
+        returnDate: dateAgo(46),
+        condition: 'worn',
+        borrower: '赵姐',
+        note: '键帽有轻微打油',
+      },
+    ],
   },
 ];
