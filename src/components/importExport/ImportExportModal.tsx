@@ -42,7 +42,7 @@ const DROPPED_CODE_LABELS: Record<string, string> = {
   missing_id: '缺少有效编号',
   invalid_action: '动作类型无效',
   invalid_event_date: '事件日期不是真实公历日期（YYYY-MM-DD）',
-  invalid_created_at: '创建时间无效',
+  invalid_created_at: '创建时间不是真实有效的 ISO 8601 时间',
   invalid_due_date: '预计归还日不是真实公历日期',
   invalid_return_date: '实际归还日不是真实公历日期',
   invalid_condition: '成色取值不合法',
@@ -666,12 +666,15 @@ export default function ImportExportModal() {
                   </div>
                   <ul className="pl-7 space-y-0.5">
                     {g.items.slice(0, 6).map((item, i) => (
-                      <li key={i} className="text-[10px] font-mono text-ink-500 truncate">
+                      <li key={i} className="text-[10px] font-mono text-ink-500 truncate" title={item.reason}>
                         「{item.keyboardName || item.keyboardId}」
                         {item.date ? ` · ${item.date}` : ''} ·{' '}
                         {CIRCULATION_ACTION_LABELS[
                           item.action as keyof typeof CIRCULATION_ACTION_LABELS
                         ] ?? item.action}
+                        {item.value !== undefined &&
+                          item.value !== item.date &&
+                          ` · 原值: ${item.value || '(空)'}`}
                       </li>
                     ))}
                     {g.items.length > 6 && (

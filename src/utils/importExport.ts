@@ -117,7 +117,9 @@ function isValidCaseMaterial(v: unknown): v is KeyboardLog['caseMaterial'] {
 import { genNewId } from './id';
 import {
   rebuildCirculationTimeline,
+  compareEventTime,
   isValidGregorianDate,
+  isValidISODateTime,
   type DroppedCirculation,
 } from './assets';
 
@@ -153,12 +155,13 @@ export function normalizeCirculation(
     item: unknown,
     code: string,
     reason: string,
-    fields?: { action?: unknown; date?: unknown },
+    fields?: { action?: unknown; date?: unknown; value?: unknown },
   ) => {
     const o =
       typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : undefined;
     const rawAction = fields?.action ?? o?.action;
     const rawDate = fields?.date ?? o?.date;
+    const rawValue = fields?.value;
     onDrop?.({
       keyboardId,
       keyboardName,
@@ -166,6 +169,12 @@ export function normalizeCirculation(
       date: typeof rawDate === 'string' ? rawDate : undefined,
       reason,
       code,
+      value:
+        typeof rawValue === 'string'
+          ? rawValue
+          : rawValue === undefined
+            ? undefined
+            : String(rawValue),
     });
   };
 
@@ -186,6 +195,7 @@ export function normalizeCirculation(
         item,
         'invalid_action',
         `动作类型无效：${o.action === undefined ? '缺失' : String(o.action)}`,
+        { value: o.action },
       );
       continue;
     }
@@ -194,26 +204,34 @@ export function normalizeCirculation(
         item,
         'invalid_event_date',
         `事件日期无效${DATE_FIELD_HINT}：${o.date === undefined ? '缺失' : String(o.date)}`,
+        { value: o.date },
       );
       continue;
     }
-    if (typeof o.createdAt !== 'string' || isNaN(Date.parse(o.createdAt))) {
+    if (!isValidISODateTime(o.createdAt)) {
       report(
         item,
         'invalid_created_at',
-        `创建时间无效：${o.createdAt === undefined ? '缺失' : String(o.createdAt)}`,
+        `创建时间不是可解析且真实存在的 ISO 8601 日期时间（如 2026-09-12T10:00:00Z）：${
+          o.createdAt === undefined ? '缺失' : String(o.createdAt)
+        }`,
+        { value: o.createdAt },
       );
       continue;
     }
 
     // 预计归还日：出现时必须是真实公历日期（借出时还会在状态机重建阶段校验非空）
     if (o.dueDate !== undefined && !isValidGregorianDate(o.dueDate)) {
-      report(item, 'invalid_due_date', `预计归还日不合法${DATE_FIELD_HINT}：${String(o.dueDate)}`);
+      report(item, 'invalid_due_date', `预计归还日不合法${DATE_FIELD_HINT}：${String(o.dueDate)}`, {
+        value: o.dueDate,
+      });
       continue;
     }
     // 实际归还日：出现时必须是真实公历日期（归还时还会在状态机重建阶段校验非空）
     if (o.returnDate !== undefined && !isValidGregorianDate(o.returnDate)) {
-      report(item, 'invalid_return_date', `实际归还日不合法${DATE_FIELD_HINT}：${String(o.returnDate)}`);
+      report(item, 'invalid_return_date', `实际归还日不合法${DATE_FIELD_HINT}：${String(o.returnDate)}`, {
+        value: o.returnDate,
+      });
       continue;
     }
     // 成色：出现时必须在合法枚举内（归还时还会在状态机重建阶段校验非空）
@@ -222,7 +240,9 @@ export function normalizeCirculation(
       (typeof o.condition !== 'string' ||
         !ASSET_CONDITIONS.includes(o.condition as AssetCondition))
     ) {
-      report(item, 'invalid_condition', `成色取值不合法：${String(o.condition)}`);
+      report(item, 'invalid_condition', `成色取值不合法：${String(o.condition)}`, {
+        value: o.condition,
+      });
       continue;
     }
 
@@ -241,9 +261,7 @@ export function normalizeCirculation(
     if (typeof o.operator === 'string') ev.operator = o.operator;
     out.push(ev);
   }
-  out.sort((a, b) =>
-    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
-  );
+  out.sort(compareEventTime);
   return out;
 }
 

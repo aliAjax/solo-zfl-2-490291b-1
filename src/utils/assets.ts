@@ -41,6 +41,57 @@ export function compareRealDates(a: string, b: string): -1 | 0 | 1 | null {
   return a < b ? -1 : 1;
 }
 
+// ISO 8601 日期时间：YYYY-MM-DD[ T]HH:mm(:ss(.fff))?(Z|±HH:mm)?（时区可省略）
+const ISO_DATETIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|(?:[+-](\d{2}):?(\d{2})))?$/;
+
+/**
+ * 是否为可解析的 ISO 8601 日期时间，并且日期（含闰年/大小月）与时刻
+ * （时 0-23、分秒 0-59）真实存在。拒绝 02-30、非闰年 02-29、非法月份、
+ * 25:00、60 分/秒、只有日期没有时间、超出 ±14:00 的时区偏移，以及非 ISO 格式。
+ */
+export function isValidISODateTime(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const m = ISO_DATETIME_RE.exec(value);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  const hh = Number(m[4]);
+  const mi = Number(m[5]);
+  const ss = m[6] === undefined ? 0 : Number(m[6]);
+  if (mo < 1 || mo > 12 || da < 1 || da > 31) return false;
+  if (hh > 23 || mi > 59 || ss > 59) return false;
+  if (m[8] !== undefined) {
+    const offH = Number(m[9]);
+    const offM = Number(m[10]);
+    if (offM > 59 || offH > 14 || (offH === 14 && offM > 0)) return false;
+  }
+  // 用 UTC 重建反查：引擎按真实公历规整，不一致说明日期不存在
+  const dt = new Date(Date.UTC(y, mo - 1, da, hh, mi, ss));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === da &&
+    dt.getUTCHours() === hh &&
+    dt.getUTCMinutes() === mi &&
+    dt.getUTCSeconds() === ss &&
+    !isNaN(dt.getTime())
+  );
+}
+
+/** 时间线排序：按创建时间真实时刻，同刻按 id 确定次序 */
+export function compareEventTime(a: CirculationEvent, b: CirculationEvent): -1 | 0 | 1 {
+  const ta = Date.parse(a.createdAt);
+  const tb = Date.parse(b.createdAt);
+  if (!isNaN(ta) && !isNaN(tb)) {
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+  } else if (a.createdAt < b.createdAt) return -1;
+  else if (a.createdAt > b.createdAt) return 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export interface ActiveLoan {
   event: CirculationEvent;
   borrower: string;
@@ -366,6 +417,8 @@ export interface DroppedCirculation {
   reason: string;
   /** 稳定的原因类别代码，用于界面按原因分组（不含具体日期/值） */
   code: string;
+  /** 触发丢弃的原始非法值（如坏的创建时间、日期字符串） */
+  value?: string;
 }
 
 export interface RebuiltCirculation {
@@ -416,13 +469,19 @@ export function rebuildCirculationTimeline(
   let activeCheckout: CirculationEvent | null = null;
   let activeMaintenance: CirculationEvent | null = null;
 
-  const sorted = [...events].sort((a, b) =>
-    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
-  );
+  const sorted = [...events].sort(compareEventTime);
 
   for (const ev of sorted) {
-    const drop = (code: string, reason: string) =>
-      dropped.push({ keyboardId, keyboardName, action: ev.action, date: ev.date, reason, code });
+    const drop = (code: string, reason: string, value?: string) =>
+      dropped.push({
+        keyboardId,
+        keyboardName,
+        action: ev.action,
+        date: ev.date,
+        reason,
+        code,
+        value,
+      });
 
     // 1) 必填字段
     if (ev.action === 'checkout') {

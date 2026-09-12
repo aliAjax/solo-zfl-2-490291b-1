@@ -4,6 +4,7 @@ import {
   CONDITION_LABELS,
 } from '@/types';
 import { formatDate } from '@/utils/helpers';
+import { compareEventTime } from '@/utils/assets';
 import {
   ArrowRightFromLine,
   ArrowRightToLine,
@@ -29,9 +30,7 @@ const ACTION_STYLES: Record<CirculationEvent['action'], string> = {
 };
 
 export default function Timeline({ log }: { log: KeyboardLog }) {
-  const events = [...(log.circulation ?? [])].sort((a, b) =>
-    a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
-  );
+  const events = [...(log.circulation ?? [])].sort((a, b) => -compareEventTime(a, b));
 
   if (events.length === 0) {
     return (
