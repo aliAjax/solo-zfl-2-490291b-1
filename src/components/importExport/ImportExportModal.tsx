@@ -535,6 +535,9 @@ export default function ImportExportModal() {
     const pureNewCount = validated.newLogs.length;
     const droppedCirculation = parseResult.droppedCirculation;
     const droppedCount = droppedCirculation.length;
+    const totalCircItems = parseResult.totalCirculationItems;
+    const keptCircItems = parseResult.keptCirculationItems;
+    const countBalanced = droppedCount === totalCircItems - keptCircItems;
 
     const droppedGroups = droppedCirculation.reduce<
       { reason: string; items: typeof droppedCirculation }[]
@@ -622,7 +625,8 @@ export default function ImportExportModal() {
           <div className="space-y-2">
             <h4 className="text-xs font-mono font-semibold text-brass-300 uppercase tracking-wider flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5" />
-              流转记录已过滤 ({droppedCount} 条，不影响其余数据导入)
+              流转记录已过滤（原始 {totalCircItems} 条 · 保留 {keptCircItems} 条 · 丢弃 {droppedCount} 条
+              {!countBalanced && ' ⚠ 计数不平'}）
             </h4>
             <div className="rounded-lg bg-brass-300/5 border border-brass-300/25 p-3 max-h-44 overflow-y-auto space-y-2.5 scrollbar-thin">
               {droppedGroups.map((g, gi) => (
@@ -638,7 +642,9 @@ export default function ImportExportModal() {
                       <li key={i} className="text-[10px] font-mono text-ink-500 truncate">
                         「{item.keyboardName || item.keyboardId}」
                         {item.date ? ` · ${item.date}` : ''} ·{' '}
-                        {CIRCULATION_ACTION_LABELS[item.action]}
+                        {CIRCULATION_ACTION_LABELS[
+                          item.action as keyof typeof CIRCULATION_ACTION_LABELS
+                        ] ?? item.action}
                       </li>
                     ))}
                     {g.items.length > 6 && (

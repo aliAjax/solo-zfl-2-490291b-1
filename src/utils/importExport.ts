@@ -32,8 +32,12 @@ export interface ImportParseResult {
   fileValidLogs: KeyboardLog[];
   fileInvalidItems: Array<{ index: number; reason: string; raw: unknown }>;
   fileInternalDuplicates: Array<{ index: number; id: string; raw: unknown }>;
-  /** 按状态机重建时间线时被丢弃的流转事件（含键盘名、动作、原因） */
+  /** 按状态机重建时间线时被丢弃的流转事件（含键盘名、动作、日期、原因） */
   droppedCirculation: DroppedCirculation[];
+  /** 文件中所有键盘记录里出现的流转项原始数量 */
+  totalCirculationItems: number;
+  /** 清洗 + 状态机重建后最终保留的流转项数量 */
+  keptCirculationItems: number;
   totalParsed: number;
   envelope?: ExportEnvelope;
 }
@@ -129,21 +133,80 @@ const VALID_CIRCULATION_ACTIONS: CirculationAction[] = [
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** 清洗单条流转事件，非法条目直接丢弃 */
-export function normalizeCirculation(raw: unknown): CirculationEvent[] {
+/**
+ * 清洗单条键盘记录的流转列表。
+ * 任何无法成为合法 CirculationEvent 的原始项都会通过 onDrop 上报
+ * （键盘、动作、日期、原因），保证：原始项数 = 保留项 + 丢弃项。
+ */
+export function normalizeCirculation(
+  raw: unknown,
+  onDrop?: (dropped: DroppedCirculation) => void,
+  ctx?: { keyboardId: string; keyboardName: string },
+): CirculationEvent[] {
   if (!Array.isArray(raw)) return [];
   const out: CirculationEvent[] = [];
+  const keyboardId = ctx?.keyboardId ?? '';
+  const keyboardName = ctx?.keyboardName ?? '';
+
+  const report = (
+    item: unknown,
+    reason: string,
+    fields?: { action?: unknown; date?: unknown },
+  ) => {
+    const o =
+      typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : undefined;
+    const rawAction = fields?.action ?? o?.action;
+    const rawDate = fields?.date ?? o?.date;
+    onDrop?.({
+      keyboardId,
+      keyboardName,
+      action: typeof rawAction === 'string' ? rawAction : '(未知动作)',
+      date: typeof rawDate === 'string' ? rawDate : undefined,
+      reason,
+    });
+  };
+
   for (const item of raw) {
-    if (typeof item !== 'object' || item === null) continue;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      report(item, '流转项不是有效的对象');
+      continue;
+    }
     const o = item as Record<string, unknown>;
-    if (typeof o.id !== 'string' || !o.id) continue;
+
+    if (typeof o.id !== 'string' || !o.id) {
+      report(item, '缺少有效编号（id）');
+      continue;
+    }
     if (
       typeof o.action !== 'string' ||
       !VALID_CIRCULATION_ACTIONS.includes(o.action as CirculationAction)
-    )
+    ) {
+      report(item, `动作类型无效：${o.action === undefined ? '缺失' : String(o.action)}`);
       continue;
-    if (typeof o.date !== 'string' || !DATE_RE.test(o.date)) continue;
-    if (typeof o.createdAt !== 'string' || isNaN(Date.parse(o.createdAt))) continue;
+    }
+    if (typeof o.date !== 'string' || !DATE_RE.test(o.date)) {
+      report(item, `事件日期格式无效（需 YYYY-MM-DD）：${o.date === undefined ? '缺失' : String(o.date)}`);
+      continue;
+    }
+    if (typeof o.createdAt !== 'string' || isNaN(Date.parse(o.createdAt))) {
+      report(item, `创建时间无效：${o.createdAt === undefined ? '缺失' : String(o.createdAt)}`);
+      continue;
+    }
+
+    // 预计归还日：出现时必须是合法日期（借出时还会在状态机重建阶段校验非空）
+    if (o.dueDate !== undefined && (typeof o.dueDate !== 'string' || !DATE_RE.test(o.dueDate))) {
+      report(item, `预计归还日不合法：${String(o.dueDate)}`);
+      continue;
+    }
+    // 成色：出现时必须在合法枚举内（归还时还会在状态机重建阶段校验非空）
+    if (
+      o.condition !== undefined &&
+      (typeof o.condition !== 'string' ||
+        !ASSET_CONDITIONS.includes(o.condition as AssetCondition))
+    ) {
+      report(item, `成色取值不合法：${String(o.condition)}`);
+      continue;
+    }
 
     const ev: CirculationEvent = {
       id: o.id,
@@ -152,15 +215,10 @@ export function normalizeCirculation(raw: unknown): CirculationEvent[] {
       createdAt: o.createdAt,
     };
     if (typeof o.borrower === 'string') ev.borrower = o.borrower;
-    if (typeof o.dueDate === 'string' && DATE_RE.test(o.dueDate)) ev.dueDate = o.dueDate;
+    if (typeof o.dueDate === 'string') ev.dueDate = o.dueDate;
     if (typeof o.returnDate === 'string' && DATE_RE.test(o.returnDate))
       ev.returnDate = o.returnDate;
-    if (
-      typeof o.condition === 'string' &&
-      ASSET_CONDITIONS.includes(o.condition as AssetCondition)
-    ) {
-      ev.condition = o.condition as AssetCondition;
-    }
+    if (typeof o.condition === 'string') ev.condition = o.condition as AssetCondition;
     if (typeof o.note === 'string') ev.note = o.note;
     if (typeof o.reason === 'string') ev.reason = o.reason;
     if (typeof o.operator === 'string') ev.operator = o.operator;
@@ -175,14 +233,31 @@ export function normalizeCirculation(raw: unknown): CirculationEvent[] {
 /**
  * 归一化一条已通过基础校验的记录：
  * 旧数据（无 status/circulation）默认在库、空时间线；
- * 有流转记录时按合法状态机逐条 replay 重建，非法切换 / 缺必填字段 / 日期倒挂的
- * 事件被丢弃，最终状态由重建后的时间线推导。onDropped 收集被丢弃事件明细。
+ * 有流转记录时先做结构清洗、再按合法状态机逐条 replay 重建。
+ * 两个阶段被丢弃的流转项都通过 onDropped 上报，满足
+ * 「原始流转项数 = 最终保留项 + 丢弃项」。
  */
 export function normalizeLog(
   log: KeyboardLog,
   onDropped?: (dropped: DroppedCirculation[]) => void,
 ): KeyboardLog {
-  const cleaned = normalizeCirculation(log.circulation);
+  const ctx = { keyboardId: log.id, keyboardName: log.name };
+  const collected: DroppedCirculation[] = [];
+  const report = (d: DroppedCirculation) => collected.push(d);
+
+  const rawCirculation = (log as Partial<KeyboardLog>).circulation;
+
+  // 非数组（但存在）的流转字段：整体计为一项被丢弃的数据
+  if (rawCirculation !== undefined && !Array.isArray(rawCirculation)) {
+    report({
+      ...ctx,
+      action: '(未知动作)',
+      reason: '流转记录不是数组，整段无法解析',
+    });
+  }
+
+  const cleaned = normalizeCirculation(rawCirculation, report, ctx);
+
   if (cleaned.length === 0) {
     let status: AssetStatus = 'in_stock';
     if (
@@ -191,10 +266,13 @@ export function normalizeLog(
     ) {
       status = log.status as AssetStatus;
     }
+    if (collected.length > 0) onDropped?.(collected);
     return { ...log, status, circulation: [] };
   }
+
   const rebuilt = rebuildCirculationTimeline(cleaned, log.id, log.name);
-  if (rebuilt.dropped.length > 0) onDropped?.(rebuilt.dropped);
+  if (rebuilt.dropped.length > 0) collected.push(...rebuilt.dropped);
+  if (collected.length > 0) onDropped?.(collected);
   return { ...log, status: rebuilt.status, circulation: rebuilt.circulation };
 }
 
@@ -307,6 +385,8 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
   const fileInvalidItems: Array<{ index: number; reason: string; raw: unknown }> = [];
   const fileInternalDuplicates: Array<{ index: number; id: string; raw: unknown }> = [];
   const droppedCirculation: DroppedCirculation[] = [];
+  let totalCirculationItems = 0;
+  let keptCirculationItems = 0;
   const seenIds = new Set<string>();
 
   rawArray.forEach((item, index) => {
@@ -316,15 +396,24 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
       return;
     }
 
-    const log = normalizeLog(item as KeyboardLog, (dropped) =>
-      droppedCirculation.push(...dropped),
-    );
+    const candidate = item as KeyboardLog;
 
-    if (seenIds.has(log.id)) {
-      fileInternalDuplicates.push({ index, id: log.id, raw: item });
+    // 文件内重复整条跳过（其流转项不重复计入）
+    if (seenIds.has(candidate.id)) {
+      fileInternalDuplicates.push({ index, id: candidate.id, raw: item });
       return;
     }
-    seenIds.add(log.id);
+    seenIds.add(candidate.id);
+
+    const rawCirc = (candidate as Partial<KeyboardLog>).circulation;
+    if (Array.isArray(rawCirc)) {
+      totalCirculationItems += rawCirc.length;
+    } else if (rawCirc !== undefined) {
+      totalCirculationItems += 1; // 非数组整段按 1 项计
+    }
+
+    const log = normalizeLog(candidate, (dropped) => droppedCirculation.push(...dropped));
+    keptCirculationItems += log.circulation?.length ?? 0;
 
     fileValidLogs.push(log);
   });
@@ -336,6 +425,8 @@ export function parseImportData(rawJson: string, existingIds: string[]): ImportP
     fileInvalidItems,
     fileInternalDuplicates,
     droppedCirculation,
+    totalCirculationItems,
+    keptCirculationItems,
     totalParsed: rawArray.length,
     envelope,
   };

@@ -302,7 +302,9 @@ export function validateCirculationAction(
 export interface DroppedCirculation {
   keyboardId: string;
   keyboardName: string;
-  action: CirculationAction;
+  /** 动作类型；脏数据可能是不在合法枚举里的原始字符串 */
+  action: CirculationAction | string;
+  /** 事件日期；清洗阶段被丢弃时可能是不合规的原始值 */
   date?: string;
   reason: string;
 }
